@@ -8,6 +8,7 @@ import {
   toHttps, fetchProtected,
   extractMetaImage, extractBiliPageCover, getBvid,
 } from '../functions/coverExtract'
+import { getYouTubeId } from '../functions/api/extract-cover'
 import {
   imageCache,
   RateLimitError, UpstreamBlockedError,
@@ -106,6 +107,83 @@ async function extractGenericCover(url: string): Promise<string> {
   throw new Error('no cover found')
 }
 
+// ── Multi-site cover extraction（与 Cloudflare Function extractCover 保持一致）───
+
+async function extractDouyinCover(url: string): Promise<string> {
+  const page = await fetchProtected('douyin:' + url, url, { referer: 'https://www.douyin.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for douyin link')
+}
+
+async function extractKuaishouCover(url: string): Promise<string> {
+  const page = await fetchProtected('kuaishou:' + url, url, { referer: 'https://www.kuaishou.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for kuaishou link')
+}
+
+async function extractTwitterCover(url: string): Promise<string> {
+  const proxied = url.replace('//x.com/', '//api.fxtwitter.com/').replace('//twitter.com/', '//api.fxtwitter.com/')
+  try {
+    const res = await fetchProtected('twitter-api:' + url, proxied)
+    if (res.status === 200 && res.text) {
+      try {
+        const j = JSON.parse(res.text)
+        const media = j?.tweet?.media?.photos?.[0]?.url
+          || j?.tweet?.media?.videos?.[0]?.thumbnail_url
+          || j?.tweet?.media?.all?.[0]?.url
+        if (typeof media === 'string' && media) return toHttps(media)
+      } catch { /* 非 JSON，继续 */ }
+    }
+  } catch (e) {
+    if (e instanceof RateLimitError || e instanceof UpstreamBlockedError) throw e
+  }
+  const page = await fetchProtected('twitter-page:' + url, url)
+  if (page.status === 200 && page.text) {
+    const cover = extractMetaImage(page.text, url)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for twitter link')
+}
+
+async function extractCctvCover(url: string): Promise<string> {
+  const page = await fetchProtected('cctv:' + url, url, { referer: 'https://tv.cctv.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text) || extractMetaImage(page.text, url)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for cctv link')
+}
+
+async function extractCover(url: string, hostname: string): Promise<string> {
+  if (hostname.endsWith('bilibili.com') || hostname.endsWith('b23.tv')) {
+    return extractBilibiliCover(url)
+  }
+  if (hostname.endsWith('youtube.com') || hostname.endsWith('youtu.be')) {
+    const id = getYouTubeId(url)
+    if (!id) throw new Error('no youtube video id in url')
+    return `https://img.youtube.com/vi/${id}/hqdefault.jpg`
+  }
+  if (hostname.endsWith('douyin.com') || hostname.endsWith('iesdouyin.com')) {
+    return extractDouyinCover(url)
+  }
+  if (hostname.endsWith('kuaishou.com') || hostname.endsWith('kuaishou.cn')) {
+    return extractKuaishouCover(url)
+  }
+  if (hostname.endsWith('x.com') || hostname.endsWith('twitter.com')) {
+    return extractTwitterCover(url)
+  }
+  if (hostname.endsWith('cctv.com') || hostname.endsWith('cctv.cn') || hostname.endsWith('cntv.cn')) {
+    return extractCctvCover(url)
+  }
+  return extractGenericCover(url)
+}
+
 // ── Vite plugin ──────────────────────────────────────────────────────────────
 
 export default function coverProxyPlugin(): Plugin {
@@ -121,8 +199,7 @@ export default function coverProxyPlugin(): Plugin {
           let target: URL
           try { target = new URL(raw) } catch { res.statusCode = 400; res.end('invalid url'); return }
           if (target.protocol !== 'http:' && target.protocol !== 'https:') { res.statusCode = 400; res.end('unsupported protocol'); return }
-          const isBili = target.hostname.endsWith('bilibili.com')
-          const cover = isBili ? await extractBilibiliCover(raw) : await extractGenericCover(raw)
+          const cover = await extractCover(raw, target.hostname)
           res.setHeader('Content-Type', 'application/json')
           res.setHeader('Access-Control-Allow-Origin', '*')
           res.end(JSON.stringify({ cover }))

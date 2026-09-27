@@ -1,11 +1,15 @@
-import { Layout as AntLayout, Typography, Button, Input, Grid, Spin, Empty, Tooltip, Space } from 'antd'
+import { Layout as AntLayout, Typography, Button, Input, Grid, Spin, Empty, Tooltip, Space, Modal, ColorPicker, message } from 'antd'
 import { 
   PlusOutlined, 
   SearchOutlined, 
   DeleteOutlined,
   FolderAddOutlined,
   EditOutlined,
-  ReloadOutlined
+  ReloadOutlined,
+  CheckSquareOutlined,
+  BgColorsOutlined,
+  TagsOutlined,
+  CloseOutlined
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useEffect, useState } from 'react'
@@ -15,7 +19,8 @@ import { useUIStore } from '../stores/uiStore'
 import FolderCard from '../components/FolderCard'
 import FolderDialog from '../components/FolderDialog'
 import ItemMiniCard from '../components/ItemMiniCard'
-import { Folder, Item, getRecentItems, getHistoryPool, incrementItemClicks } from '../core/database'
+import TagSelector from '../components/TagSelector'
+import { Folder, Item, getRecentItems, getHistoryPool, incrementItemClicks, deleteFolder, setFoldersColor, addTagsToFolders } from '../core/database'
 import { isItemUnlocked } from '../utils/password'
 
 const { Content } = AntLayout
@@ -43,6 +48,65 @@ export default function HomePage() {
   const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
   // Mobile: the search bar collapses to an icon that opens an inline input
   const [searchOpen, setSearchOpen] = useState(false)
+  // ── 多选模式 ──────────────────────────────────────────────────────────────
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  // 批量改色弹窗
+  const [batchColorOpen, setBatchColorOpen] = useState(false)
+  const [batchColorDraft, setBatchColorDraft] = useState('#0078d7')
+  // 批量标签弹窗
+  const [batchTagsOpen, setBatchTagsOpen] = useState(false)
+  const [batchTags, setBatchTags] = useState<string[]>([])
+
+  const toggleSelectionMode = () => {
+    setSelectionMode((prev) => !prev)
+    setSelectedIds([])
+  }
+
+  const handleToggleSelect = (id: number) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
+  }
+
+  // 批量删除（确认后逐个移入回收站）
+  const handleBatchDelete = () => {
+    if (selectedIds.length === 0) return
+    Modal.confirm({
+      title: t('batch_delete_title'),
+      content: t('batch_delete_folders_confirm', { count: selectedIds.length }),
+      okText: t('confirm'),
+      okButtonProps: { danger: true },
+      cancelText: t('cancel'),
+      onOk: async () => {
+        for (const id of selectedIds) {
+          await deleteFolder(id)
+        }
+        setSelectedIds([])
+        setSelectionMode(false)
+        loadFolders()
+        message.success(t('batch_delete_done', { count: selectedIds.length }))
+      },
+    })
+  }
+
+  // 批量改色
+  const handleBatchColor = async () => {
+    await setFoldersColor(selectedIds, batchColorDraft)
+    setBatchColorOpen(false)
+    loadFolders()
+    message.success(t('batch_color_done', { count: selectedIds.length }))
+  }
+
+  // 批量添加标签
+  const handleBatchTags = async () => {
+    if (batchTags.length === 0) return
+    await addTagsToFolders(selectedIds, batchTags)
+    setBatchTagsOpen(false)
+    setBatchTags([])
+    loadFolders()
+    message.success(t('batch_tags_done', { count: selectedIds.length }))
+  }
   // Recent / history rows
   const [recentItems, setRecentItems] = useState<Item[]>([])
   const [historyItems, setHistoryItems] = useState<Item[]>([])
@@ -176,34 +240,87 @@ export default function HomePage() {
           </Text>
         </div>
 
-        <div style={{ display: 'flex', gap: 12 }}>
-          {isMobile ? (
-            <Tooltip title={t('folder_search_placeholder')}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 多选模式：搜索框左边显示批量操作按钮 */}
+          {selectionMode ? (
+            <Space size={8} wrap>
+              <Tooltip title={t('batch_delete')}>
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  disabled={selectedIds.length === 0}
+                  onClick={handleBatchDelete}
+                />
+              </Tooltip>
+              <Tooltip title={t('batch_color')}>
+                <Button
+                  icon={<BgColorsOutlined />}
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    setBatchColorDraft('#0078d7')
+                    setBatchColorOpen(true)
+                  }}
+                />
+              </Tooltip>
+              <Tooltip title={t('batch_tags')}>
+                <Button
+                  icon={<TagsOutlined />}
+                  disabled={selectedIds.length === 0}
+                  onClick={() => {
+                    setBatchTags([])
+                    setBatchTagsOpen(true)
+                  }}
+                />
+              </Tooltip>
               <Button
-                icon={<SearchOutlined />}
-                onClick={() => setSearchOpen(true)}
-              />
-            </Tooltip>
+                icon={<CloseOutlined />}
+                onClick={toggleSelectionMode}
+              >
+                {t('batch_exit')}
+              </Button>
+              <Text type="secondary" style={{ fontSize: '0.8125rem' }}>
+                {t('batch_selected_count', { count: selectedIds.length })}
+              </Text>
+            </Space>
           ) : (
-            <Input
-              placeholder={t('folder_search_placeholder')}
-              prefix={<SearchOutlined />}
-              allowClear
-              style={{ width: '15rem' }}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
+            <>
+              {isMobile ? (
+                <Tooltip title={t('folder_search_placeholder')}>
+                  <Button
+                    icon={<SearchOutlined />}
+                    onClick={() => setSearchOpen(true)}
+                  />
+                </Tooltip>
+              ) : (
+                <Input
+                  placeholder={t('folder_search_placeholder')}
+                  prefix={<SearchOutlined />}
+                  allowClear
+                  style={{ width: '15rem' }}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              )}
+              <Tooltip title={t('batch_select_mode')}>
+                <Button
+                  icon={<CheckSquareOutlined />}
+                  onClick={toggleSelectionMode}
+                />
+              </Tooltip>
+            </>
           )}
-          
-          <Tooltip title={t('add_folder')}>
-            <Button
-              type="primary"
-              icon={language === 'en' ? undefined : <PlusOutlined />}
-              onClick={handleAddFolder}
-            >
-              {!isMobile && t('add_folder_btn')}
-            </Button>
-          </Tooltip>
+
+          {!selectionMode && (
+            <Tooltip title={t('add_folder')}>
+              <Button
+                type="primary"
+                icon={language === 'en' ? undefined : <PlusOutlined />}
+                onClick={handleAddFolder}
+              >
+                {!isMobile && t('add_folder_btn')}
+              </Button>
+            </Tooltip>
+          )}
         </div>
 
         {/* Mobile: tapping the search icon reveals an inline search box */}
@@ -311,6 +428,9 @@ export default function HomePage() {
                 folder={folder}
                 onPasswordChange={() => loadFolders()}
                 searchQuery={searchQuery}
+                selectionMode={selectionMode}
+                selected={selectedIds.includes(folder.id)}
+                onToggleSelect={handleToggleSelect}
               />
               
               {/* Context Actions */}
@@ -361,6 +481,59 @@ export default function HomePage() {
         initialName={editingFolder?.name}
         initialTags={editingFolder?.tags || []}
       />
+
+      {/* 批量改色弹窗 */}
+      <Modal
+        title={t('batch_color_title', { count: selectedIds.length })}
+        open={batchColorOpen}
+        onCancel={() => setBatchColorOpen(false)}
+        onOk={handleBatchColor}
+        okText={t('confirm')}
+        cancelText={t('cancel')}
+        width={380}
+        centered
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+          <div
+            style={{
+              width: '4rem',
+              height: '4rem',
+              borderRadius: 12,
+              background: `linear-gradient(135deg, ${batchColorDraft}20, ${batchColorDraft}40)`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <FolderAddOutlined style={{ fontSize: '2rem', color: batchColorDraft }} />
+          </div>
+          <ColorPicker
+            value={batchColorDraft}
+            onChange={(value) => {
+              const hex = typeof value === 'string' ? value : value?.toHexString?.()
+              if (hex) setBatchColorDraft(hex)
+            }}
+            disabledAlpha
+            showText
+          />
+        </div>
+      </Modal>
+
+      {/* 批量标签弹窗 */}
+      <Modal
+        title={t('batch_tags_title', { count: selectedIds.length })}
+        open={batchTagsOpen}
+        onCancel={() => { setBatchTagsOpen(false); setBatchTags([]) }}
+        onOk={handleBatchTags}
+        okText={t('confirm')}
+        cancelText={t('cancel')}
+        width={480}
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary">{t('batch_tags_hint')}</Text>
+        </div>
+        <TagSelector value={batchTags} onChange={setBatchTags} />
+      </Modal>
     </div>
   )
 }

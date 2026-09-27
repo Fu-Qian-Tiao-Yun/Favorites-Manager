@@ -22,6 +22,8 @@ interface ItemDialogProps {
   }) => void
   item?: Item | null
   onGenerateSummary?: (url: string, itemType: 'link' | 'file') => Promise<string>
+  /** 手机端分享流程：打开时预填 URL/标题/分类并触发自动识别 */
+  sharePreset?: { url: string; title?: string; category?: string } | null
 }
 
 export default function ItemDialog({
@@ -29,7 +31,8 @@ export default function ItemDialog({
   onClose,
   onSubmit,
   item,
-  onGenerateSummary
+  onGenerateSummary,
+  sharePreset
 }: ItemDialogProps) {
   const [form] = Form.useForm()
   const { t } = useTranslation()
@@ -198,6 +201,21 @@ export default function ItemDialog({
           else setCoverType('local')
           setCoverPreview(isImageCover(savedCover) ? savedCover : null)
           setCoverFile(null)
+        } else if (sharePreset) {
+          // 手机端分享预填：填入 URL/标题，触发自动识别（标题/分类/封面）
+          setItemType('link')
+          setTags([])
+          form.resetFields()
+          form.setFieldsValue({
+            itemType: 'link',
+            url: sharePreset.url,
+            title: sharePreset.title || '',
+            category: sharePreset.category || ''
+          })
+          setCoverType('local')
+          setCoverPreview(null)
+          setCoverFile(null)
+          setTimeout(() => { handleAutoRecognizeRef.current() }, 50)
         } else {
           setItemType('link')
           setTags([])
@@ -209,7 +227,7 @@ export default function ItemDialog({
         }
       }, 100)
     }
-  }, [open, item])
+  }, [open, item, sharePreset])
 
   const handleSubmit = async () => {
     try {
@@ -228,6 +246,9 @@ export default function ItemDialog({
       // Validation failed
     }
   }
+
+  // 让 sharePreset 的 effect 在 handleAutoRecognize 定义前也能调用它
+  const handleAutoRecognizeRef = useRef<() => void>(() => {})
 
   const handleAutoRecognize = async () => {
     const url = form.getFieldValue('url')
@@ -299,6 +320,9 @@ export default function ItemDialog({
       setRecognizing(false)
     }
   }
+
+  // 把实际函数挂到 ref 上，供 sharePreset effect（定义在其之前）调用
+  handleAutoRecognizeRef.current = () => { handleAutoRecognize() }
 
   // Extract the cover image from the item's URL via page metadata (og:image).
   // This is the only network path - everything else stays local.

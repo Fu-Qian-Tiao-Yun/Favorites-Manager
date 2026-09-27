@@ -129,6 +129,113 @@ async function extractGenericCover(url: string): Promise<string> {
   throw new Error('no cover found')
 }
 
+// ── YouTube ─────────────────────────────────────────────────────────────────
+// 缩略图直接由 img.youtube.com 提供，无需抓取页面。
+
+export function getYouTubeId(url: string): string {
+  const patterns = [
+    /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/,
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+  ]
+  for (const p of patterns) {
+    const m = url.match(p)
+    if (m) return m[1]
+  }
+  return ''
+}
+
+// ── Douyin（抖音）─────────────────────────────────────────────────────────────
+// 抖音分享链接（v.douyin.com/xxx）302 到真实视频页；页面 og:image 可用。
+// 抓取时必须带浏览器 UA + Cookie，否则拿到的是验证页。
+
+async function extractDouyinCover(url: string): Promise<string> {
+  const page = await fetchProtected('douyin:' + url, url, { referer: 'https://www.douyin.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for douyin link')
+}
+
+// ── Kuaishou（快手）───────────────────────────────────────────────────────────
+
+async function extractKuaishouCover(url: string): Promise<string> {
+  const page = await fetchProtected('kuaishou:' + url, url, { referer: 'https://www.kuaishou.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for kuaishou link')
+}
+
+// ── Twitter / X ──────────────────────────────────────────────────────────────
+// x.com 页面是 JS 渲染，og:image 需要绕过。 syndication API 已收紧，
+// 这里退回抓取页面并用 metatags 兼容（twitter:image 也可能出现在 SSR 响应里）。
+
+async function extractTwitterCover(url: string): Promise<string> {
+  // fxtwitter / vxtwitter 代理返回稳定的 og:image，无需登录
+  const proxied = url.replace('//x.com/', '//api.fxtwitter.com/').replace('//twitter.com/', '//api.fxtwitter.com/')
+  try {
+    const res = await fetchProtected('twitter-api:' + url, proxied)
+    if (res.status === 200 && res.text) {
+      try {
+        const j = JSON.parse(res.text)
+        const media = j?.tweet?.media?.photos?.[0]?.url
+          || j?.tweet?.media?.videos?.[0]?.thumbnail_url
+          || j?.tweet?.media?.all?.[0]?.url
+        if (typeof media === 'string' && media) return toHttps(media)
+      } catch { /* 非 JSON，继续 */ }
+    }
+  } catch (e) {
+    if (e instanceof RateLimitError || e instanceof UpstreamBlockedError) throw e
+  }
+  // 兜底：抓原页 og:image
+  const page = await fetchProtected('twitter-page:' + url, url)
+  if (page.status === 200 && page.text) {
+    const cover = extractMetaImage(page.text, url)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for twitter link')
+}
+
+// ── 央视网 ──────────────────────────────────────────────────────────────────
+//央视页面为 SSR，og:image 可直接提取；部分老页面用 image_src link 标签。
+
+async function extractCctvCover(url: string): Promise<string> {
+  const page = await fetchProtected('cctv:' + url, url, { referer: 'https://tv.cctv.com/' })
+  if (page.status === 200 && page.text) {
+    const cover = extractBiliPageCover(page.text) || extractMetaImage(page.text, url)
+    if (cover) return toHttps(cover)
+  }
+  throw new Error('no cover found for cctv link')
+}
+
+// ── 站点路由 ────────────────────────────────────────────────────────────────
+
+async function extractCover(url: string, hostname: string): Promise<string> {
+  if (hostname.endsWith('bilibili.com') || hostname.endsWith('b23.tv')) {
+    return extractBilibiliCover(url)
+  }
+  if (hostname.endsWith('youtube.com') || hostname.endsWith('youtu.be')) {
+    const id = getYouTubeId(url)
+    if (!id) throw new Error('no youtube video id in url')
+    return `https://img.youtube.com/vi/${id}/hqdefault.jpg`
+  }
+  if (hostname.endsWith('douyin.com') || hostname.endsWith('iesdouyin.com')) {
+    return extractDouyinCover(url)
+  }
+  if (hostname.endsWith('kuaishou.com') || hostname.endsWith('kuaishou.cn')) {
+    return extractKuaishouCover(url)
+  }
+  if (hostname.endsWith('x.com') || hostname.endsWith('twitter.com')) {
+    return extractTwitterCover(url)
+  }
+  if (hostname.endsWith('cctv.com') || hostname.endsWith('cctv.cn') || hostname.endsWith('cntv.cn')) {
+    return extractCctvCover(url)
+  }
+  return extractGenericCover(url)
+}
+
 // ── Cloudflare Pages Function handler ────────────────────────────────────────
 
 // Minimal shape of the Cloudflare Pages Function context — avoids adding a
@@ -161,9 +268,8 @@ export const onRequest = async (context: PagesFunctionContext) => {
   }
 
   try {
-    const isBili = target.hostname.endsWith('bilibili.com')
-    console.log(`[extract-cover] ${isBili ? 'bilibili' : 'generic'} cover extraction for: ${target.hostname}`)
-    const cover = isBili ? await extractBilibiliCover(raw) : await extractGenericCover(raw)
+    console.log(`[extract-cover] cover extraction for: ${target.hostname}`)
+    const cover = await extractCover(raw, target.hostname)
     return jsonResponse({ cover })
   } catch (err) {
     const { status, message } = friendlyError(err)

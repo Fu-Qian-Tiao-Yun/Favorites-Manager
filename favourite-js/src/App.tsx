@@ -8,6 +8,7 @@ import HomePage from './pages/HomePage'
 import ItemsPage from './pages/ItemsPage'
 import SettingsPage from './pages/SettingsPage'
 import AboutPage from './pages/AboutPage'
+import ShareHandler from './utils/shareHandler'
 
 const { darkAlgorithm } = theme
 
@@ -35,6 +36,8 @@ function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
+        {/* 手机端系统分享接收：监听 Capacitor 插件并弹出收藏流程 */}
+        <ShareHandler />
       </div>
     </ConfigProvider>
   )

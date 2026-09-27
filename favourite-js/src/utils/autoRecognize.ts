@@ -6,6 +6,7 @@
 // Cover extraction is the ONLY network path: it delegates to the server
 // (/api/extract-cover?url=...) which does the actual fetch with browser-like
 // headers. Works in both dev (Vite plugin) and production (Cloudflare Pages Functions).
+import { apiBase } from '../config'
 
 // Common file type mappings to categories
 const FILE_TYPE_CATEGORIES: Record<string, string> = {
@@ -72,6 +73,8 @@ const SITE_CATEGORIES: Record<string, string> = {
   'acfun.cn': 'Video', 'nicovideo.jp': 'Video', 'crunchyroll.com': 'Video', 'hulu.com': 'Video',
   'hbomax.com': 'Video', 'netflix.com': 'Video', 'disneyplus.com': 'Video', 'primevideo.com': 'Video',
   'apple.com': 'Video', 'peacocktv.com': 'Video', 'paramountplus.com': 'Video',
+  'bilibili.com': 'Video', 'b23.tv': 'Video', 'kuaishou.com': 'Video', 'ixigua.com': 'Video',
+  'weishi.qq.com': 'Video', 'kuaishou.cn': 'Video',
   'spotify.com': 'Music', 'soundcloud.com': 'Music', 'bandcamp.com': 'Music',
   'music.163.com': 'Music', 'music.apple.com': 'Music', 'music.amazon.com': 'Music',
   'deezer.com': 'Music', 'tidal.com': 'Music', 'pandora.com': 'Music', 'last.fm': 'Music',
@@ -104,7 +107,7 @@ const SITE_CATEGORIES: Record<string, string> = {
   'khanacademy.org': 'Education', 'ted.com': 'Education', 'duolingo.com': 'Education',
   'brilliant.org': 'Education', 'skillshare.com': 'Education', 'linkedin.com/learning': 'Education',
   'mooc.cn': 'Education', 'icourse163.org': 'Education', 'xuetangx.com': 'Education',
-  'bilibili.com': 'Education', 'study.163.com': 'Education', 'imooc.com': 'Education',
+  'study.163.com': 'Education', 'imooc.com': 'Education',
   'openai.com': 'AI', 'chat.openai.com': 'AI', 'claude.ai': 'AI', 'anthropic.com': 'AI',
   'bard.google.com': 'AI', 'gemini.google.com': 'AI', 'huggingface.co': 'AI', 'kaggle.com': 'AI',
   'tensorflow.org': 'AI', 'pytorch.org': 'AI', 'midjourney.com': 'AI', 'stability.ai': 'AI',
@@ -139,6 +142,7 @@ const SITE_CATEGORIES: Record<string, string> = {
   'weibo.com': 'Social', 'qq.com': 'Social',
   'taobao.com': 'Shopping', 'jd.com': 'Shopping', 'tmall.com': 'Shopping',
   'iqiyi.com': 'Video', 'youku.com': 'Video',
+  'cctv.com': 'Video', 'cctv.cn': 'Video', 'cntv.cn': 'Video', 'tv.cctv.com': 'Video',
   'sohu.com': 'News', 'sina.com.cn': 'News', '163.com': 'News',
   'gitee.com': 'Programming', 'coding.net': 'Programming',
   'jianshu.com': 'Reading', 'toutiao.com': 'News', '36kr.com': 'News', 'huxiu.com': 'News',
@@ -175,9 +179,18 @@ function cleanShareLink(input: string): string {
 export function getCategoryFromSite(hostname: string): string {
   const cleanHostname = hostname.replace(/^www\./, '')
   if (SITE_CATEGORIES[cleanHostname]) return SITE_CATEGORIES[cleanHostname]
+  // 精确未命中时按「子域名命中」匹配：hostname 以 <domain> 或 .<domain> 结尾。
+  // 用后缀而不是 includes，避免 v.qq.com 误命中 qq.com(Social) 这类问题——
+  // 更长的 key（v.qq.com: Video）已在上面精确命中。
+  // 先尝试最长匹配，防止短域名遮蔽长域名。
+  let best: { len: number; category: string } | null = null
   for (const [domain, category] of Object.entries(SITE_CATEGORIES)) {
-    if (cleanHostname.includes(domain)) return category
+    if (!domain) continue
+    if (cleanHostname === domain || cleanHostname.endsWith('.' + domain)) {
+      if (!best || domain.length > best.len) best = { len: domain.length, category }
+    }
   }
+  if (best) return best.category
   return SITE_CATEGORIES['']
 }
 
@@ -252,7 +265,7 @@ async function extractCoverViaBackend(url: string): Promise<string> {
       await new Promise(r => setTimeout(r, 1000 * attempt))
     }
     try {
-      const res = await fetch('/api/extract-cover?url=' + encodeURIComponent(url), {
+      const res = await fetch(apiBase() + '/api/extract-cover?url=' + encodeURIComponent(url), {
         signal: AbortSignal.timeout(12000),
       })
       // If the API route isn't deployed (e.g. Cloudflare Pages Functions missing),
@@ -294,6 +307,8 @@ export async function extractCoverFromUrl(input: string): Promise<string> {
   const url = cleanShareLink(input)
   const ytId = getYouTubeId(url)
   if (ytId) return `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
+  // Backend returns the original page URL; the image itself is proxied via
+  // /api/cover-img when displayed (presetCovers.proxiedCoverUrl).
   return await extractCoverViaBackend(url)
 }
 

@@ -56,22 +56,44 @@ export default function Layout() {
           zIndex: 100
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Title 
-            level={4} 
-            style={{ 
-              margin: 0,
-              color: darkMode ? '#fff' : '#333',
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 16 }}
+          onClick={() => {
+            if (pathname !== '/') navigate('/')
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
               cursor: 'pointer',
-              // Shrink with the screen width (min 1.125rem, max 1.5rem)
-              fontSize: 'clamp(1.125rem, 4.5vw, 1.5rem)'
-            }}
-            onClick={() => {
-              if (pathname !== '/') navigate('/')
             }}
           >
-            📚 {t('window_title')}
-          </Title>
+            <img
+              src="/icon.png"
+              alt=""
+              style={{
+                width: '1.5rem',
+                height: '1.5rem',
+                display: 'block',
+                flexShrink: 0,
+              }}
+            />
+            <Title
+              level={4}
+              style={{
+                margin: 0,
+                color: darkMode ? '#fff' : '#333',
+                cursor: 'pointer',
+                // Shrink with the screen width (min 1.125rem, max 1.5rem)
+                fontSize: 'clamp(1.125rem, 4.5vw, 1.5rem)',
+                lineHeight: 1.2,
+              }}
+            >
+              {t('window_title')}
+            </Title>
+          </div>
         </div>
 
         <Space size={8}>
@@ -127,7 +149,7 @@ export default function Layout() {
           padding: '0 var(--page-pad)'
         }}
       >
-        v1.0.0 | Made By FuQian
+        v1.0.1 | Made By FuQian
       </Footer>
     </AntLayout>
   )

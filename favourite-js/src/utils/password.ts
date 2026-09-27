@@ -46,33 +46,33 @@ export async function verifyPassword(password: string, storedHash: string, salt:
   return hash === storedHash
 }
 
-// Check if folder/item is unlocked (session)
+// ── 解锁状态（内存态）─────────────────────────────────────────────────────────
+// 之前的实现把解锁状态存进 sessionStorage：应用进程还活着时一直有效，
+// 只有完全退出才会重新上锁。现在改为纯内存 Set：每次打开应用（页面刷新、
+// WebView 重建）都要重新输入密码，安全性和预期一致。
+
+const unlockedKeys = new Set<string>()
+
+function unlockKey(type: 'folder' | 'item', id: number): string {
+  return `${type}-${id}`
+}
+
+// Check if folder/item is unlocked
 export function isItemUnlocked(type: 'folder' | 'item', id: number): boolean {
-  const key = `favourite-unlocked-${type}-${id}`
-  return sessionStorage.getItem(key) === 'true'
+  return unlockedKeys.has(unlockKey(type, id))
 }
 
-// Mark as unlocked (session)
+// Mark as unlocked
 export function setItemUnlocked(type: 'folder' | 'item', id: number): void {
-  const key = `favourite-unlocked-${type}-${id}`
-  sessionStorage.setItem(key, 'true')
+  unlockedKeys.add(unlockKey(type, id))
 }
 
-// Lock (clear session)
+// Lock (remove from memory)
 export function lockItem(type: 'folder' | 'item', id: number): void {
-  const key = `favourite-unlocked-${type}-${id}`
-  sessionStorage.removeItem(key)
+  unlockedKeys.delete(unlockKey(type, id))
 }
 
 // Lock all items
 export function lockAll(): void {
-  // Get all session keys and remove favourites ones
-  const keys: string[] = []
-  for (let i = 0; i < sessionStorage.length; i++) {
-    const key = sessionStorage.key(i)
-    if (key && key.startsWith('favourite-unlocked-')) {
-      keys.push(key)
-    }
-  }
-  keys.forEach(key => sessionStorage.removeItem(key))
+  unlockedKeys.clear()
 }

@@ -2,6 +2,7 @@
 // Preset covers are stored as `preset:<key>` strings (e.g. `preset:video`) so
 // they can be rendered as a solid background color + a category icon anywhere.
 
+import { apiBase } from '../config'
 import {
   VideoCameraOutlined,
   PictureOutlined,
@@ -91,7 +92,7 @@ export const isImageCover = (value?: string | null): boolean =>
 export const proxiedCoverUrl = (value?: string | null): string => {
   if (!value || value.startsWith('data:')) return value || ''
   if (value.startsWith('http://') || value.startsWith('https://')) {
-    return `/api/cover-img?url=${encodeURIComponent(value)}`
+    return `${apiBase()}/api/cover-img?url=${encodeURIComponent(value)}`
   }
   return value
 }
