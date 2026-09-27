@@ -343,7 +343,9 @@ export default function ItemDialog({
       message.success(t('cover_extracted'))
     } catch (err) {
       console.error('Cover extraction failed:', err)
-      message.warning(t('cover_extract_failed'))
+      // 后端返回的具体错误信息优先展示，便于用户/开发者定位问题层次
+      const backendMsg = err instanceof Error && err.message && !err.message.startsWith('backend') ? err.message : undefined
+      message.warning(backendMsg || t('cover_extract_failed'))
     } finally {
       setCoverExtracting(false)
     }

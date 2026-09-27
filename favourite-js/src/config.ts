@@ -2,8 +2,13 @@
 // Android / Electron 等原生打包环境没有同源的 /api 前缀，
 // 需要指向部署在 Cloudflare Pages 上的 Functions。
 
-/** 线上站点地址（不带末尾斜杠） */
-export const PRODUCTION_SITE = 'https://c9ae68e0.favorites-manager.pages.dev'
+/**
+ * 线上站点地址（不带末尾斜杠）。
+ * 注意：一定要用正式域名 favorites-manager.pages.dev，
+ * 不能用带部署 hash 的地址（如 c9ae68e0.favorites-manager.pages.dev）——
+ * 那是某一次历史部署的快照，Functions 可能是旧版甚至缺失。
+ */
+export const PRODUCTION_SITE = 'https://favorites-manager.pages.dev'
 
 /**
  * 是否运行在 Electron 打包环境中。
