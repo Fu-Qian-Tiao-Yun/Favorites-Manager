@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-import coverProxyPlugin from './functions/coverPlugin.js'
+import coverProxyPlugin from './vite-plugins/coverPlugin.js'
 
 export default defineConfig({
   plugins: [react(), coverProxyPlugin()],

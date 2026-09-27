@@ -3,9 +3,10 @@
 // Title/category recognition is purely local and offline: it derives a title
 // and a category from the pasted text/link without any network request.
 //
-// Cover extraction is the ONLY network path: it delegates entirely to the
-// Vite dev-server plugin (/__cover/extract?url=...) which does the actual
-// fetch server-side with browser-like headers. No CORS proxies are used.
+// Cover extraction is the ONLY network path: it delegates to the server
+// (/api/extract-cover?url=...) which does the actual fetch with browser-like
+// headers. Works in both dev (Vite plugin) and production (Cloudflare Pages Functions).
+import { apiBase } from '../config'
 
 // Common file type mappings to categories
 const FILE_TYPE_CATEGORIES: Record<string, string> = {
@@ -72,6 +73,8 @@ const SITE_CATEGORIES: Record<string, string> = {
   'acfun.cn': 'Video', 'nicovideo.jp': 'Video', 'crunchyroll.com': 'Video', 'hulu.com': 'Video',
   'hbomax.com': 'Video', 'netflix.com': 'Video', 'disneyplus.com': 'Video', 'primevideo.com': 'Video',
   'apple.com': 'Video', 'peacocktv.com': 'Video', 'paramountplus.com': 'Video',
+  'bilibili.com': 'Video', 'b23.tv': 'Video', 'kuaishou.com': 'Video', 'ixigua.com': 'Video',
+  'weishi.qq.com': 'Video', 'kuaishou.cn': 'Video',
   'spotify.com': 'Music', 'soundcloud.com': 'Music', 'bandcamp.com': 'Music',
   'music.163.com': 'Music', 'music.apple.com': 'Music', 'music.amazon.com': 'Music',
   'deezer.com': 'Music', 'tidal.com': 'Music', 'pandora.com': 'Music', 'last.fm': 'Music',
@@ -104,7 +107,7 @@ const SITE_CATEGORIES: Record<string, string> = {
   'khanacademy.org': 'Education', 'ted.com': 'Education', 'duolingo.com': 'Education',
   'brilliant.org': 'Education', 'skillshare.com': 'Education', 'linkedin.com/learning': 'Education',
   'mooc.cn': 'Education', 'icourse163.org': 'Education', 'xuetangx.com': 'Education',
-  'bilibili.com': 'Education', 'study.163.com': 'Education', 'imooc.com': 'Education',
+  'study.163.com': 'Education', 'imooc.com': 'Education',
   'openai.com': 'AI', 'chat.openai.com': 'AI', 'claude.ai': 'AI', 'anthropic.com': 'AI',
   'bard.google.com': 'AI', 'gemini.google.com': 'AI', 'huggingface.co': 'AI', 'kaggle.com': 'AI',
   'tensorflow.org': 'AI', 'pytorch.org': 'AI', 'midjourney.com': 'AI', 'stability.ai': 'AI',
@@ -139,6 +142,7 @@ const SITE_CATEGORIES: Record<string, string> = {
   'weibo.com': 'Social', 'qq.com': 'Social',
   'taobao.com': 'Shopping', 'jd.com': 'Shopping', 'tmall.com': 'Shopping',
   'iqiyi.com': 'Video', 'youku.com': 'Video',
+  'cctv.com': 'Video', 'cctv.cn': 'Video', 'cntv.cn': 'Video', 'tv.cctv.com': 'Video',
   'sohu.com': 'News', 'sina.com.cn': 'News', '163.com': 'News',
   'gitee.com': 'Programming', 'coding.net': 'Programming',
   'jianshu.com': 'Reading', 'toutiao.com': 'News', '36kr.com': 'News', 'huxiu.com': 'News',
@@ -175,9 +179,18 @@ function cleanShareLink(input: string): string {
 export function getCategoryFromSite(hostname: string): string {
   const cleanHostname = hostname.replace(/^www\./, '')
   if (SITE_CATEGORIES[cleanHostname]) return SITE_CATEGORIES[cleanHostname]
+  // 精确未命中时按「子域名命中」匹配：hostname 以 <domain> 或 .<domain> 结尾。
+  // 用后缀而不是 includes，避免 v.qq.com 误命中 qq.com(Social) 这类问题——
+  // 更长的 key（v.qq.com: Video）已在上面精确命中。
+  // 先尝试最长匹配，防止短域名遮蔽长域名。
+  let best: { len: number; category: string } | null = null
   for (const [domain, category] of Object.entries(SITE_CATEGORIES)) {
-    if (cleanHostname.includes(domain)) return category
+    if (!domain) continue
+    if (cleanHostname === domain || cleanHostname.endsWith('.' + domain)) {
+      if (!best || domain.length > best.len) best = { len: domain.length, category }
+    }
   }
+  if (best) return best.category
   return SITE_CATEGORIES['']
 }
 
@@ -243,19 +256,59 @@ function toHttps(url: string): string {
 }
 
 async function extractCoverViaBackend(url: string): Promise<string> {
-  const res = await fetch('/__cover/extract?url=' + encodeURIComponent(url), {
-    signal: AbortSignal.timeout(12000),
-  })
-  if (!res.ok) throw new Error('backend cover failed: HTTP ' + res.status)
-  const j = (await res.json()) as { cover?: string; error?: string }
-  if (typeof j.cover === 'string' && j.cover) return j.cover
-  throw new Error(j.error || 'backend returned no cover')
+  const MAX_RETRIES = 2
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 1s, 2s
+      await new Promise(r => setTimeout(r, 1000 * attempt))
+    }
+    try {
+      const res = await fetch(apiBase() + '/api/extract-cover?url=' + encodeURIComponent(url), {
+        signal: AbortSignal.timeout(12000),
+      })
+      // If the API route isn't deployed (e.g. Cloudflare Pages Functions missing),
+      // the SPA fallback returns index.html. Detect it and raise a clear error
+      // instead of a confusing "Unexpected token '<'" JSON parse failure.
+      const contentType = res.headers.get('content-type') || ''
+      if (contentType.includes('text/html')) {
+        throw new Error(
+          '封面服务不可用（接口返回了网页而非 JSON）。'
+          + '如果你在使用 Cloudflare Pages，请确认部署时包含了 functions/ 目录，'
+          + '详见仓库中的 DEPLOY.md。'
+        )
+      }
+      const j = (await res.json()) as { cover?: string; error?: string }
+      if (res.ok && typeof j.cover === 'string' && j.cover) return j.cover
+      // Don't retry client errors (4xx) — they're deterministic
+      if (res.status >= 400 && res.status < 500) {
+        throw new Error(j.error || 'backend cover failed: HTTP ' + res.status)
+      }
+      // 5xx — retryable
+      lastError = new Error(j.error || 'backend cover failed: HTTP ' + res.status)
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') {
+        lastError = new Error('封面提取超时，请稍后重试')
+      } else if (e instanceof Error) {
+        lastError = e
+      } else {
+        lastError = new Error('封面提取失败')
+      }
+      // Deployment errors are deterministic — do not retry
+      if (lastError.message.includes('封面服务不可用')) break
+      // Network errors are retryable
+    }
+  }
+  throw lastError || new Error('封面提取失败')
 }
 
 export async function extractCoverFromUrl(input: string): Promise<string> {
   const url = cleanShareLink(input)
   const ytId = getYouTubeId(url)
   if (ytId) return `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`
+  // Backend returns the original page URL; the image itself is proxied via
+  // /api/cover-img when displayed (presetCovers.proxiedCoverUrl).
   return await extractCoverViaBackend(url)
 }
 

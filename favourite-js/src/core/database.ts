@@ -11,6 +11,8 @@ export interface Folder {
   password_hash?: string | null
   password_salt?: string | null
   tags?: string[]
+  /** 收藏夹卡片图标的自定义颜色；空 = 同步主题色 */
+  color?: string | null
 }
 
 export interface Item {
@@ -34,7 +36,26 @@ const STORAGE_KEYS = {
   ITEMS: 'favourite_items',
   TAGS: 'favourite_tags',
   NEXT_FOLDER_ID: 'favourite_next_folder_id',
-  NEXT_ITEM_ID: 'favourite_next_item_id'
+  NEXT_ITEM_ID: 'favourite_next_item_id',
+  /** 回收站：软删除的收藏夹（含 items），30 天后彻底清除 */
+  TRASH: 'favourite_trash'
+}
+
+/** 回收站保留期（毫秒）：30 天 */
+export const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+export interface TrashEntry {
+  /** 原收藏夹 id（恢复时尽量复用） */
+  originalFolderId: number
+  name: string
+  created_at: string
+  tags?: string[]
+  color?: string | null
+  password_hash?: string | null
+  password_salt?: string | null
+  items: Item[]
+  /** 删除时间 */
+  deleted_at: number
 }
 
 // Initialize storage with defaults if empty
@@ -155,10 +176,65 @@ export async function renameFolder(id: number, name: string, tags?: string[]): P
   }
 }
 
+/** 设置收藏夹卡片图标颜色（null = 恢复自动同步主题色） */
+export async function setFolderColor(id: number, color: string | null): Promise<void> {
+  initStorage()
+  const folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
+  const index = folders.findIndex(f => f.id === id)
+  if (index !== -1) {
+    folders[index].color = color
+    storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders))
+  }
+}
+
+/** 批量设置收藏夹颜色 */
+export async function setFoldersColor(ids: number[], color: string | null): Promise<void> {
+  initStorage()
+  const folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
+  for (const folder of folders) {
+    if (ids.includes(folder.id)) folder.color = color
+  }
+  storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders))
+}
+
+/** 批量给收藏夹追加标签（合并去重，不覆盖已有标签） */
+export async function addTagsToFolders(ids: number[], newTags: string[]): Promise<void> {
+  initStorage()
+  const folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
+  let changed = false
+  for (const folder of folders) {
+    if (!ids.includes(folder.id)) continue
+    const merged = [...new Set([...(folder.tags || []), ...newTags])]
+    if (merged.length !== (folder.tags || []).length) {
+      folder.tags = merged
+      changed = true
+    }
+  }
+  if (changed) storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders))
+}
+
 export async function deleteFolder(id: number): Promise<void> {
   initStorage()
   let folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
   let items: Item[] = JSON.parse(storage.getItem(STORAGE_KEYS.ITEMS) || '[]')
+  
+  // 移入回收站（30 天内可恢复）
+  const folder = folders.find(f => f.id === id)
+  if (folder) {
+    const trash: TrashEntry[] = JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]')
+    trash.push({
+      originalFolderId: folder.id,
+      name: folder.name,
+      created_at: folder.created_at,
+      tags: folder.tags,
+      color: folder.color ?? null,
+      password_hash: folder.password_hash ?? null,
+      password_salt: folder.password_salt ?? null,
+      items: items.filter(item => item.folder_id === id),
+      deleted_at: Date.now(),
+    })
+    storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(trash))
+  }
   
   // Remove folder and its items
   folders = folders.filter(f => f.id !== id)
@@ -166,6 +242,76 @@ export async function deleteFolder(id: number): Promise<void> {
   
   storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders))
   storage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items))
+}
+
+// ── 回收站 ──────────────────────────────────────────────────────────────────
+
+function purgeExpiredTrash(trash: TrashEntry[]): TrashEntry[] {
+  const cutoff = Date.now() - TRASH_RETENTION_MS
+  return trash.filter(entry => entry.deleted_at > cutoff)
+}
+
+/** 回收站列表（自动清除超过 30 天的条目） */
+export function getTrash(): TrashEntry[] {
+  initStorage()
+  const trash: TrashEntry[] = JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]')
+  const valid = purgeExpiredTrash(trash)
+  if (valid.length !== trash.length) {
+    storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(valid))
+  }
+  return valid.sort((a, b) => b.deleted_at - a.deleted_at)
+}
+
+/** 从回收站恢复收藏夹及其收藏项 */
+export function restoreFromTrash(originalFolderId: number): void {
+  initStorage()
+  const trash: TrashEntry[] = JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]')
+  const index = trash.findIndex(t => t.originalFolderId === originalFolderId)
+  if (index === -1) return
+  const entry = trash[index]
+
+  const folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
+  const items: Item[] = JSON.parse(storage.getItem(STORAGE_KEYS.ITEMS) || '[]')
+  let nextFolderId = parseInt(storage.getItem(STORAGE_KEYS.NEXT_FOLDER_ID) || '1')
+  let nextItemId = parseInt(storage.getItem(STORAGE_KEYS.NEXT_ITEM_ID) || '1')
+
+  // 若原 id 已被占用则分配新 id
+  const idTaken = folders.some(f => f.id === entry.originalFolderId)
+  const newFolderId = idTaken ? nextFolderId++ : entry.originalFolderId
+
+  folders.push({
+    id: newFolderId,
+    name: entry.name,
+    created_at: entry.created_at,
+    tags: entry.tags,
+    color: entry.color ?? null,
+    password_hash: entry.password_hash ?? null,
+    password_salt: entry.password_salt ?? null,
+  })
+  for (const item of entry.items) {
+    items.push({ ...item, folder_id: newFolderId })
+  }
+
+  storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders))
+  storage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify(items))
+  storage.setItem(STORAGE_KEYS.NEXT_FOLDER_ID, String(nextFolderId))
+  storage.setItem(STORAGE_KEYS.NEXT_ITEM_ID, String(nextItemId))
+
+  trash.splice(index, 1)
+  storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(trash))
+}
+
+/** 彻底删除回收站中的单个条目 */
+export function purgeTrashEntry(originalFolderId: number): void {
+  initStorage()
+  const trash: TrashEntry[] = JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]')
+  storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(trash.filter(t => t.originalFolderId !== originalFolderId)))
+}
+
+/** 清空回收站 */
+export function emptyTrash(): void {
+  initStorage()
+  storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify([]))
 }
 
 // Item operations
@@ -318,6 +464,8 @@ export function exportData(): string {
     folders: JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]'),
     items: JSON.parse(storage.getItem(STORAGE_KEYS.ITEMS) || '[]'),
     tags: JSON.parse(storage.getItem(STORAGE_KEYS.TAGS) || '[]'),
+    trash: JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]'),
+    version: 1,
     exported_at: new Date().toISOString()
   })
 }
@@ -344,6 +492,10 @@ export function importData(jsonString: string): void {
     const maxItemId = Math.max(...data.items.map((i: Item) => i.id), 0)
     storage.setItem(STORAGE_KEYS.NEXT_ITEM_ID, String(maxItemId + 1))
   }
+  
+  if (data.trash && Array.isArray(data.trash)) {
+    storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(data.trash))
+  }
 }
 
 // Clear all data (for testing)
@@ -354,6 +506,37 @@ export function clearAllData(): void {
   storage.removeItem(STORAGE_KEYS.NEXT_FOLDER_ID)
   storage.removeItem(STORAGE_KEYS.NEXT_ITEM_ID)
   initStorage()
+}
+
+/**
+ * 一键清理：把全部收藏夹（含收藏项）移入回收站。
+ * 30 天内可通过回收站恢复；到期自动彻底清除。
+ */
+export function moveAllToTrash(): number {
+  initStorage()
+  const folders: Folder[] = JSON.parse(storage.getItem(STORAGE_KEYS.FOLDERS) || '[]')
+  const items: Item[] = JSON.parse(storage.getItem(STORAGE_KEYS.ITEMS) || '[]')
+  const trash: TrashEntry[] = JSON.parse(storage.getItem(STORAGE_KEYS.TRASH) || '[]')
+  const now = Date.now()
+
+  for (const folder of folders) {
+    trash.push({
+      originalFolderId: folder.id,
+      name: folder.name,
+      created_at: folder.created_at,
+      tags: folder.tags,
+      color: folder.color ?? null,
+      password_hash: folder.password_hash ?? null,
+      password_salt: folder.password_salt ?? null,
+      items: items.filter(item => item.folder_id === folder.id),
+      deleted_at: now,
+    })
+  }
+
+  storage.setItem(STORAGE_KEYS.TRASH, JSON.stringify(trash))
+  storage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify([]))
+  storage.setItem(STORAGE_KEYS.ITEMS, JSON.stringify([]))
+  return folders.length
 }
 
 // Password protection for folders

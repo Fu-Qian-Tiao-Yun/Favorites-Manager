@@ -77,7 +77,7 @@ export const coverCache = new TTLCache<string>(30 * 60 * 1000)
 export const BILIBILI_CACHE_TTL = 10 * 60 * 1000  // 10 minutes
 
 // Image proxy cache: 24 hours (images rarely change)
-export const imageCache = new TTLCache<Buffer>(24 * 60 * 60 * 1000)
+export const imageCache = new TTLCache<Uint8Array>(24 * 60 * 60 * 1000)
 
 // ── Per-domain rate limiter (sliding window) ─────────────────────────────────
 

@@ -5,12 +5,13 @@ import { useTranslation } from 'react-i18next'
 const { Title, Text, Paragraph, Link } = Typography
 
 // Replace with the real repository URL if different.
-const GITHUB_REPO_URL = 'https://github.com/FuQian/favourite-js'
+const GITHUB_REPO_URL = 'https://github.com/Fu-Qian-Tiao-Yun/Favorites-Manager/tree/main'
 
 export default function AboutPage() {
   const { t } = useTranslation()
 
   const helpItems = [
+    { key: 'whatsnew', label: t('help_whatsnew_q'), content: t('help_whatsnew_a') },
     { key: 'folder', label: t('help_folder_q'), content: t('help_folder_a') },
     { key: 'item', label: t('help_item_q'), content: t('help_item_a') },
     { key: 'tag', label: t('help_tag_q'), content: t('help_tag_a') },
@@ -25,9 +26,24 @@ export default function AboutPage() {
 
       <Card>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <Title level={1} style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-            📚 {t('app_name')}
-          </Title>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              marginBottom: '1rem',
+            }}
+          >
+            <img
+              src="/icon.png"
+              alt=""
+              style={{ width: '3rem', height: '3rem', display: 'block' }}
+            />
+            <Title level={1} style={{ fontSize: '3rem', margin: 0 }}>
+              {t('app_name')}
+            </Title>
+          </div>
           <Text type="secondary" style={{ fontSize: '1rem' }}>
             {t('description')}
           </Text>
@@ -35,7 +51,7 @@ export default function AboutPage() {
 
         <Descriptions column={1} bordered>
           <Descriptions.Item label={t('version')}>
-            v1.0.0
+            v1.0.1
           </Descriptions.Item>
           <Descriptions.Item label={t('license')}>
             MIT License
