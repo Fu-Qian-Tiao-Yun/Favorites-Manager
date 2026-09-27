@@ -16,7 +16,7 @@
     "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0",
-    "@capawesome/capacitor-electron": "^0.1.0",
+    "@capawesome/capacitor-electron": "^0.1.1",
     "antd": "^5.20.0",
     "autoprefixer": "^10.4.19",
     "dayjs": "^1.11.12",
