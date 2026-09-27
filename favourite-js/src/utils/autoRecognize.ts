@@ -255,6 +255,17 @@ async function extractCoverViaBackend(url: string): Promise<string> {
       const res = await fetch('/api/extract-cover?url=' + encodeURIComponent(url), {
         signal: AbortSignal.timeout(12000),
       })
+      // If the API route isn't deployed (e.g. Cloudflare Pages Functions missing),
+      // the SPA fallback returns index.html. Detect it and raise a clear error
+      // instead of a confusing "Unexpected token '<'" JSON parse failure.
+      const contentType = res.headers.get('content-type') || ''
+      if (contentType.includes('text/html')) {
+        throw new Error(
+          '封面服务不可用（接口返回了网页而非 JSON）。'
+          + '如果你在使用 Cloudflare Pages，请确认部署时包含了 functions/ 目录，'
+          + '详见仓库中的 DEPLOY.md。'
+        )
+      }
       const j = (await res.json()) as { cover?: string; error?: string }
       if (res.ok && typeof j.cover === 'string' && j.cover) return j.cover
       // Don't retry client errors (4xx) — they're deterministic
@@ -271,6 +282,8 @@ async function extractCoverViaBackend(url: string): Promise<string> {
       } else {
         lastError = new Error('封面提取失败')
       }
+      // Deployment errors are deterministic — do not retry
+      if (lastError.message.includes('封面服务不可用')) break
       // Network errors are retryable
     }
   }

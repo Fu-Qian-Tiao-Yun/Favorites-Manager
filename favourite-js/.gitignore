@@ -26,3 +26,12 @@ dist-ssr
 # Build artifacts
 *.db
 *.sqlite
+
+# TypeScript build artifacts (no emit — sources are .ts only)
+functions/**/*.js
+functions/**/*.d.ts
+vite-plugins/**/*.js
+vite-plugins/**/*.d.ts
+vite.config.js
+vite.config.d.ts
+*.tsbuildinfo

@@ -10,7 +10,7 @@ import {
   rateLimiter, getRateLimitConfig, dedupRequest,
   extractDomain, isBilibiliDomain,
   RateLimitError, UpstreamBlockedError,
-} from './rateLimit.js'
+} from './rateLimit'
 
 export const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent':
@@ -29,6 +29,35 @@ export const BROWSER_HEADERS: Record<string, string> = {
   'Sec-Ch-Ua-Platform': '"Windows"',
 }
 
+// ── Bilibili cookie helpers ──────────────────────────────────────────────────
+// Bilibili requires a buvid3 cookie to accept API requests from non-browser
+// environments (including Cloudflare edge IPs).  Without it the API returns
+// -412 (risk control) or simply empty data.
+
+function generateBuvid3(): string {
+  // buvid3 is a UUID v4 with a suffix: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx-infoc
+  const hex = '0123456789abcdef'
+  const uuid = Array.from({ length: 36 }, (_, i) => {
+    if (i === 8 || i === 13 || i === 18 || i === 23) return '-'
+    if (i === 14) return '4'
+    if (i === 19) return hex[(Math.random() * 4) | 8]
+    return hex[(Math.random() * 16) | 0]
+  }).join('')
+  return uuid + 'infoc'
+}
+
+// Stable per-isolate buvid3 value (generated once, reused)
+let _cachedBuvid3: string | null = null
+function getBuvid3(): string {
+  if (!_cachedBuvid3) _cachedBuvid3 = generateBuvid3()
+  return _cachedBuvid3
+}
+
+/** Returns Cookie header string suitable for Bilibili requests */
+export function biliCookie(): string {
+  return `buvid3=${getBuvid3()}; b_nut=100; b_lsid=10a4c0c8_18e5f8a7b40`
+}
+
 export const MAX_BODY = 3 * 1024 * 1024
 export const TIMEOUT_MS = 8000
 
@@ -44,11 +73,16 @@ export function resolveUrl(href: string, base: string): string {
 
 export async function fetchBody(
   url: string,
-  opts?: { referer?: string }
+  opts?: { referer?: string; cookie?: string }
 ): Promise<{ status: number; contentType: string; text: string }> {
   const headers = { ...BROWSER_HEADERS }
+  const hostname = new URL(url).hostname
   if (opts?.referer) headers.Referer = opts.referer
-  else if (new URL(url).hostname.endsWith('bilibili.com')) headers.Referer = 'https://www.bilibili.com/'
+  else if (hostname.endsWith('bilibili.com')) headers.Referer = 'https://www.bilibili.com/'
+  // Attach buvid3 cookie for Bilibili domains
+  if (hostname.endsWith('bilibili.com') || hostname.endsWith('hdslb.com')) {
+    headers.Cookie = opts?.cookie || biliCookie()
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
   try {

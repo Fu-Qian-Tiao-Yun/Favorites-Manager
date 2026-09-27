@@ -5,8 +5,8 @@
 import {
   toHttps, fetchProtected,
   extractMetaImage, extractBiliPageCover, getBvid,
-} from '../coverExtract.js'
-import { RateLimitError, UpstreamBlockedError } from '../rateLimit.js'
+} from '../coverExtract'
+import { RateLimitError, UpstreamBlockedError } from '../rateLimit'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -30,6 +30,10 @@ function friendlyError(err: unknown): { status: number; message: string } {
     return { status: 503, message: err.message }
   }
   const msg = err instanceof Error ? err.message : String(err)
+  // "no cover found" is not a server error — it's a 404
+  if (msg.includes('no cover found') || msg.includes('no bvid')) {
+    return { status: 404, message: '无法提取封面，请手动设置' }
+  }
   if (msg.includes('ECONNREFUSED') || msg.includes('ENOTFOUND') || msg.includes('fetch failed') || msg.includes('connect')) {
     return { status: 502, message: '无法连接到目标服务器' }
   }
@@ -41,7 +45,7 @@ function friendlyError(err: unknown): { status: number; message: string } {
   }
   // Log unexpected errors for debugging
   console.error('[extract-cover] unexpected error:', err)
-  return { status: 502, message: msg || '封面提取失败' }
+  return { status: 500, message: msg || '封面提取失败' }
 }
 
 // ── Bilibili cover extraction (API → page og:image → player API) ─────────────
@@ -50,16 +54,20 @@ async function extractBilibiliCover(videoUrl: string): Promise<string> {
   const bvid = getBvid(videoUrl)
   if (!bvid) throw new Error('no bvid in url')
 
-  // 1) Official API
+  console.log(`[extract-cover] bilibili cover extraction for bvid=${bvid}`)
+
+  // 1) Official API — the most reliable source for video cover
   try {
     const api = await fetchProtected(
       'bili-api:' + bvid,
       'https://api.bilibili.com/x/web-interface/view?bvid=' + bvid,
       { referer: 'https://www.bilibili.com/' },
     )
+    console.log(`[extract-cover] bili-api: status=${api.status}, text_len=${api.text?.length || 0}`)
     if (api.status === 200 && api.text) {
       let j: any = null
       try { j = JSON.parse(api.text) } catch { j = null }
+      if (j) console.log(`[extract-cover] bili-api code=${j.code}, has_pic=${!!j.data?.pic}`)
       if (j?.code === 0 && typeof j.data?.pic === 'string' && j.data.pic) return toHttps(j.data.pic)
       if (j?.code === 0 && typeof j.data?.pages?.[0]?.first_frame === 'string' && j.data.pages[0].first_frame) return toHttps(j.data.pages[0].first_frame)
     }
@@ -68,32 +76,38 @@ async function extractBilibiliCover(videoUrl: string): Promise<string> {
     console.warn('[extract-cover] bilibili API error:', e instanceof Error ? e.message : e)
   }
 
-  // 2) Video page HTML
+  // 2) Video page HTML — extract og:image meta tag
   try {
     const page = await fetchProtected(
       'bili-page:' + bvid,
       videoUrl,
       { referer: 'https://www.bilibili.com/' },
     )
+    console.log(`[extract-cover] bili-page: status=${page.status}, text_len=${page.text?.length || 0}`)
     if (page.status === 200 && page.text) {
       const cover = extractBiliPageCover(page.text)
-      if (cover) return toHttps(cover)
+      if (cover) {
+        console.log(`[extract-cover] bili-page: found cover via meta tag`)
+        return toHttps(cover)
+      }
     }
   } catch (e) {
     if (e instanceof RateLimitError || e instanceof UpstreamBlockedError) throw e
     console.warn('[extract-cover] bilibili page error:', e instanceof Error ? e.message : e)
   }
 
-  // 3) Player API
+  // 3) Player API — last resort
   try {
     const api2 = await fetchProtected(
       'bili-player:' + bvid,
       'https://api.bilibili.com/x/player/pic?bvid=' + bvid,
       { referer: 'https://www.bilibili.com/video/' + bvid },
     )
+    console.log(`[extract-cover] bili-player: status=${api2.status}, text_len=${api2.text?.length || 0}`)
     if (api2.status === 200 && api2.text) {
       let j: any = null
       try { j = JSON.parse(api2.text) } catch { j = null }
+      if (j) console.log(`[extract-cover] bili-player code=${j.code}, has_data=${typeof j.data}`)
       if (j?.code === 0 && typeof j.data === 'string' && j.data) return toHttps(j.data)
     }
   } catch (e) {
@@ -101,6 +115,7 @@ async function extractBilibiliCover(videoUrl: string): Promise<string> {
     console.warn('[extract-cover] bilibili player API error:', e instanceof Error ? e.message : e)
   }
 
+  console.error(`[extract-cover] all bilibili strategies failed for bvid=${bvid}`)
   throw new Error('no cover found for bilibili link')
 }
 
@@ -116,7 +131,13 @@ async function extractGenericCover(url: string): Promise<string> {
 
 // ── Cloudflare Pages Function handler ────────────────────────────────────────
 
-export const onRequest: PagesFunction = async (context) => {
+// Minimal shape of the Cloudflare Pages Function context — avoids adding a
+// build-time dependency on @cloudflare/workers-types.
+interface PagesFunctionContext {
+  request: Request
+}
+
+export const onRequest = async (context: PagesFunctionContext) => {
   // Handle CORS preflight
   if (context.request.method === 'OPTIONS') {
     return new Response(null, {

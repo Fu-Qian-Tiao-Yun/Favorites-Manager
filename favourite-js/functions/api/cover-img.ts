@@ -1,10 +1,16 @@
 // Cloudflare Pages Function — /api/cover-img?url=<encoded image url>
 // Proxies images with caching to bypass CORS/hotlink restrictions.
 
-import { BROWSER_HEADERS, TIMEOUT_MS, MAX_BODY } from '../coverExtract.js'
-import { imageCache } from '../rateLimit.js'
+import { BROWSER_HEADERS, TIMEOUT_MS, MAX_BODY } from '../coverExtract'
+import { imageCache } from '../rateLimit'
 
-export const onRequest: PagesFunction = async (context) => {
+// Minimal shape of the Cloudflare Pages Function context — avoids adding a
+// build-time dependency on @cloudflare/workers-types.
+interface PagesFunctionContext {
+  request: Request
+}
+
+export const onRequest = async (context: PagesFunctionContext) => {
   // Handle CORS preflight
   if (context.request.method === 'OPTIONS') {
     return new Response(null, {
@@ -30,7 +36,8 @@ export const onRequest: PagesFunction = async (context) => {
   // Check cache
   const cached = imageCache.get(raw)
   if (cached) {
-    return new Response(cached, {
+    const cachedBody = cached.slice().buffer as ArrayBuffer
+    return new Response(cachedBody, {
       headers: {
         'Content-Type': 'image/jpeg',
         'Cache-Control': 'public, max-age=86400',
@@ -64,7 +71,11 @@ export const onRequest: PagesFunction = async (context) => {
     // Cache the image
     imageCache.set(raw, buf)
 
-    return new Response(buf, {
+    // Copy into a plain ArrayBuffer so the bytes satisfy the Response BodyInit
+    // type under TS 5.7+ (Uint8Array<ArrayBufferLike> vs BodyInit).
+    const body = buf.slice().buffer as ArrayBuffer
+
+    return new Response(body, {
       headers: {
         'Content-Type': upstream.headers.get('content-type') || 'image/jpeg',
         'Cache-Control': 'public, max-age=86400',

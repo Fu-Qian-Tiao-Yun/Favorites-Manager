@@ -7,11 +7,11 @@ import {
   BROWSER_HEADERS, MAX_BODY, TIMEOUT_MS,
   toHttps, fetchProtected,
   extractMetaImage, extractBiliPageCover, getBvid,
-} from '../functions/coverExtract.js'
+} from '../functions/coverExtract'
 import {
   imageCache,
   RateLimitError, UpstreamBlockedError,
-} from '../functions/rateLimit.js'
+} from '../functions/rateLimit'
 
 // ── Friendly error messages for known error types ────────────────────────────
 
@@ -32,7 +32,11 @@ function friendlyError(err: unknown): { status: number; message: string } {
   if (msg.includes('body too large') || msg.includes('response too large')) {
     return { status: 413, message: '响应内容过大' }
   }
-  return { status: 502, message: msg || '封面提取失败' }
+  // "no cover found" is not a server error — it's a 404
+  if (msg.includes('no cover found') || msg.includes('no bvid')) {
+    return { status: 404, message: '无法提取封面，请手动设置' }
+  }
+  return { status: 500, message: msg || '封面提取失败' }
 }
 
 // ── Bilibili cover extraction (API → page og:image → player API) ────────────
